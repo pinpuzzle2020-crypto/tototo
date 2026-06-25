@@ -36,6 +36,11 @@
             background-color: var(--accent-soft);
         }
 
+        .resize-handle:hover {
+            background-color: rgba(0, 0, 0, 0.12);
+            border-radius: 0 0 4px 4px;
+        }
+
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-thumb { background: #D8D4CC; border-radius: 10px; }
 
@@ -92,6 +97,9 @@
     <script>
         const START_HOUR = 7;
         const END_HOUR = 24;
+        const TOTAL_ROWS = END_HOUR - START_HOUR + 1;
+        const ROW_HEIGHT_DAY = 64;
+        const ROW_HEIGHT_WEEK = 56;
         const DAY_LABELS = ['월', '화', '수', '목', '금', '토', '일'];
 
         const PALETTE = {
@@ -123,12 +131,18 @@
         // ---- state ----
         let taskIdCounter = 4;
         let tasks = [
-            { id: 'task-1', text: '아침 스트레칭 및 루틴', color: 'clay', day: null, hour: null },
-            { id: 'task-2', text: '신규 프로젝트 UI 스케치', color: 'slate', day: null, hour: null },
-            { id: 'task-3', text: '레퍼런스 리서치', color: 'moss', day: null, hour: null },
+            { id: 'task-1', text: '아침 스트레칭 및 루틴', color: 'clay', day: null, hour: null, duration: 1 },
+            { id: 'task-2', text: '신규 프로젝트 UI 스케치', color: 'slate', day: null, hour: null, duration: 1 },
+            { id: 'task-3', text: '레퍼런스 리서치', color: 'moss', day: null, hour: null, duration: 1 },
         ];
         let currentView = 'day';
         let draggedTaskId = null;
+
+        // ---- duration helpers ----
+        function clampDuration(hour, duration) {
+            const maxDur = TOTAL_ROWS - (hour - START_HOUR);
+            return Math.max(1, Math.min(duration || 1, maxDur));
+        }
 
         // ---- persistence (localStorage) ----
         const STORAGE_KEY = 'timeblock-data-v1';
@@ -148,15 +162,42 @@
         }
 
         // ---- rendering ----
-        function taskCardHTML(task) {
+        function backlogCardHTML(task) {
             const p = PALETTE[task.color];
-            const btnTitle = task.day === null ? '삭제' : '목록으로 되돌리기';
             return `<div class="task-card font-medium text-sm pl-3 pr-2 py-2.5 rounded-md flex items-center justify-between gap-2"
                          style="background-color:${p.tint}; border-left-color:${p.border};"
                          draggable="true" data-task-id="${task.id}">
                         <span class="truncate">${escapeHTML(task.text)}</span>
                         <button class="delete-btn shrink-0 text-[var(--text-muted)] hover:text-[var(--accent)] text-xs leading-none px-1 py-0.5"
-                                draggable="false" data-task-id="${task.id}" title="${btnTitle}">✕</button>
+                                draggable="false" data-task-id="${task.id}" title="삭제">✕</button>
+                    </div>`;
+        }
+
+        function placedCardHTML(task, rowHeight, gridColumn) {
+            const p = PALETTE[task.color];
+            const rowStart = task.hour - START_HOUR + 1;
+            return `<div class="task-card font-medium text-sm pl-3 pr-2 py-2 rounded-md flex items-start justify-between gap-2 relative"
+                         style="background-color:${p.tint}; border-left-color:${p.border}; grid-column:${gridColumn}; grid-row:${rowStart} / span ${task.duration}; margin:2px 4px; z-index:1;"
+                         draggable="true" data-task-id="${task.id}">
+                        <span class="truncate">${escapeHTML(task.text)}</span>
+                        <button class="delete-btn shrink-0 text-[var(--text-muted)] hover:text-[var(--accent)] text-xs leading-none px-1 py-0.5"
+                                draggable="false" data-task-id="${task.id}" title="목록으로 되돌리기">✕</button>
+                        <div class="resize-handle" draggable="false" data-task-id="${task.id}" data-row-height="${rowHeight}"
+                             style="position:absolute; left:4px; right:4px; bottom:0; height:7px; cursor:row-resize;"></div>
+                    </div>`;
+        }
+
+        function placedCardHTMLWeek(task, rowHeight, gridColumn, rowOffset) {
+            const p = PALETTE[task.color];
+            const rowStart = task.hour - START_HOUR + 1 + rowOffset;
+            return `<div class="task-card text-[11px] font-medium pl-1.5 pr-1 py-1 rounded flex items-start justify-between gap-1 relative"
+                         style="background-color:${p.tint}; border-left-color:${p.border}; grid-column:${gridColumn}; grid-row:${rowStart} / span ${task.duration}; margin:1px 2px; z-index:1;"
+                         draggable="true" data-task-id="${task.id}" title="${escapeHTML(task.text)}">
+                        <span class="truncate">${escapeHTML(task.text)}</span>
+                        <button class="delete-btn shrink-0 text-[10px] leading-none opacity-50 hover:opacity-100"
+                                draggable="false" data-task-id="${task.id}" title="목록으로 되돌리기">✕</button>
+                        <div class="resize-handle" draggable="false" data-task-id="${task.id}" data-row-height="${rowHeight}"
+                             style="position:absolute; left:2px; right:2px; bottom:0; height:5px; cursor:row-resize;"></div>
                     </div>`;
         }
 
@@ -170,64 +211,64 @@
             const list = document.getElementById('todoList');
             const unplaced = tasks.filter(t => t.day === null);
             list.innerHTML = unplaced.length
-                ? unplaced.map(taskCardHTML).join('')
+                ? unplaced.map(backlogCardHTML).join('')
                 : `<p class="text-xs text-[var(--text-muted)] py-2">모두 일정에 배치됨</p>`;
         }
 
         function renderDayView() {
             const container = document.getElementById('dayViewContainer');
+            container.style.display = 'grid';
+            container.style.gridTemplateColumns = '56px 1fr';
+            container.style.gridAutoRows = `${ROW_HEIGHT_DAY}px`;
+            container.style.position = 'relative';
+
             let html = '';
             for (let h = START_HOUR; h <= END_HOUR; h++) {
+                const row = h - START_HOUR + 1;
                 const timeText = h === 24 ? '00:00' : `${h.toString().padStart(2, '0')}:00`;
-                const slotTasks = tasks.filter(t => t.day === todayIndex && t.hour === h);
-                html += `
-                    <div class="flex border-b border-[var(--border)] min-h-[64px]">
-                        <div class="w-14 text-right pr-3 py-2.5 text-xs font-medium text-[var(--text-muted)] tabular-nums">
-                            ${timeText}
-                        </div>
-                        <div class="time-slot flex-1 p-1.5 flex flex-col gap-1.5" data-hour="${h}">
-                            ${slotTasks.map(taskCardHTML).join('')}
-                        </div>
-                    </div>`;
+                html += `<div class="text-right pr-3 py-2.5 text-xs font-medium text-[var(--text-muted)] tabular-nums border-b border-[var(--border)]"
+                              style="grid-column:1; grid-row:${row};">${timeText}</div>`;
+                html += `<div class="time-slot border-b border-[var(--border)]" data-hour="${h}"
+                              style="grid-column:2; grid-row:${row};"></div>`;
             }
+            const placed = tasks.filter(t => t.day === todayIndex && t.hour !== null);
+            html += placed.map(t => placedCardHTML(t, ROW_HEIGHT_DAY, 2)).join('');
             container.innerHTML = html;
         }
 
         function renderWeekView() {
             const container = document.getElementById('weekViewContainer');
-            let header = `<div class="flex sticky top-0 bg-[var(--surface)] z-10">
-                <div class="w-12 shrink-0"></div>`;
+            const HEADER_ROWS = 1;
+            container.style.display = 'grid';
+            container.style.gridTemplateColumns = `48px repeat(7, 1fr)`;
+            container.style.gridTemplateRows = `auto repeat(${TOTAL_ROWS}, ${ROW_HEIGHT_WEEK}px)`;
+            container.style.position = 'relative';
+
+            let html = `<div style="grid-column:1; grid-row:1;"></div>`;
             for (let d = 0; d < 7; d++) {
                 const isToday = d === todayIndex;
-                header += `
-                    <div class="flex-1 text-center py-1.5 border-b border-[var(--border)]">
+                html += `
+                    <div class="text-center py-1.5 border-b border-[var(--border)] sticky top-0 bg-[var(--surface)] z-10"
+                         style="grid-column:${d + 2}; grid-row:1;">
                         <div class="text-xs font-medium ${isToday ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]'}">${DAY_LABELS[d]}</div>
                         <div class="text-xs ${isToday ? 'today-pill inline-block rounded-full w-5 h-5 leading-5 font-semibold' : 'text-[var(--text-muted)]'} mt-0.5">${weekDates[d].getDate()}</div>
                     </div>`;
             }
-            header += `</div>`;
 
-            let rows = '';
             for (let h = START_HOUR; h <= END_HOUR; h++) {
+                const row = h - START_HOUR + 1 + HEADER_ROWS;
                 const timeText = h === 24 ? '00:00' : `${h.toString().padStart(2, '0')}:00`;
-                rows += `<div class="flex border-b border-[var(--border)] min-h-[52px]">
-                    <div class="w-12 shrink-0 text-right pr-2 py-1.5 text-[11px] font-medium text-[var(--text-muted)] tabular-nums">${timeText}</div>`;
+                html += `<div class="text-right pr-2 py-1.5 text-[11px] font-medium text-[var(--text-muted)] tabular-nums border-b border-[var(--border)]"
+                              style="grid-column:1; grid-row:${row};">${timeText}</div>`;
                 for (let d = 0; d < 7; d++) {
-                    const slotTasks = tasks.filter(t => t.day === d && t.hour === h);
-                    rows += `<div class="time-slot flex-1 p-1 border-l border-[var(--border)] flex flex-col gap-1" data-day="${d}" data-hour="${h}">
-                        ${slotTasks.map(t => `
-                            <div class="task-card text-[11px] font-medium pl-1.5 pr-1 py-1 rounded flex items-center justify-between gap-1"
-                                 style="background-color:${PALETTE[t.color].tint}; border-left-color:${PALETTE[t.color].border};"
-                                 draggable="true" data-task-id="${t.id}" title="${escapeHTML(t.text)}">
-                                <span class="truncate">${escapeHTML(t.text)}</span>
-                                <button class="delete-btn shrink-0 text-[10px] leading-none opacity-50 hover:opacity-100"
-                                        draggable="false" data-task-id="${t.id}" title="목록으로 되돌리기">✕</button>
-                            </div>`).join('')}
-                    </div>`;
+                    html += `<div class="time-slot border-b border-l border-[var(--border)]" data-day="${d}" data-hour="${h}"
+                                  style="grid-column:${d + 2}; grid-row:${row};"></div>`;
                 }
-                rows += `</div>`;
             }
-            container.innerHTML = header + rows;
+
+            const placed = tasks.filter(t => t.day !== null && t.hour !== null);
+            html += placed.map(t => placedCardHTMLWeek(t, ROW_HEIGHT_WEEK, t.day + 2, HEADER_ROWS)).join('');
+            container.innerHTML = html;
         }
 
         function renderAll() {
@@ -274,7 +315,7 @@
             const text = input.value.trim();
             if (!text) return;
             const color = PALETTE_KEYS[taskIdCounter % PALETTE_KEYS.length];
-            tasks.push({ id: `task-${taskIdCounter++}`, text, color, day: null, hour: null });
+            tasks.push({ id: `task-${taskIdCounter++}`, text, color, day: null, hour: null, duration: 1 });
             input.value = '';
             renderAll();
         }
@@ -299,6 +340,35 @@
                 tasks = tasks.filter(t => t.id !== id);
             }
             renderAll();
+        });
+
+        // ---- resizing (extend a placed task across multiple hours) ----
+        document.addEventListener('mousedown', e => {
+            const handle = e.target.closest('.resize-handle');
+            if (!handle) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const task = tasks.find(t => t.id === handle.dataset.taskId);
+            if (!task) return;
+            const rowHeight = parseInt(handle.dataset.rowHeight, 10);
+            const startY = e.clientY;
+            const startDuration = task.duration;
+            const maxDuration = TOTAL_ROWS - (task.hour - START_HOUR);
+
+            function onMove(ev) {
+                const deltaRows = Math.round((ev.clientY - startY) / rowHeight);
+                const newDuration = Math.max(1, Math.min(startDuration + deltaRows, maxDuration));
+                if (newDuration !== task.duration) {
+                    task.duration = newDuration;
+                    renderAll();
+                }
+            }
+            function onUp() {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+            }
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
         });
 
         // ---- drag and drop (delegated, state-driven) ----
@@ -344,10 +414,12 @@
                     // week view slot
                     task.day = parseInt(slot.dataset.day, 10);
                     task.hour = parseInt(slot.dataset.hour, 10);
+                    task.duration = clampDuration(task.hour, task.duration);
                 } else {
                     // day view slot -> always today's column
                     task.day = todayIndex;
                     task.hour = parseInt(slot.dataset.hour, 10);
+                    task.duration = clampDuration(task.hour, task.duration);
                 }
                 renderAll();
             });
